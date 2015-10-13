@@ -49,7 +49,7 @@ class NeuralAgent(object):
         except OSError:
             os.makedirs(self.exp_dir)
 
-        self.num_actions = self.network.num_actions
+        self.action_shape = self.network.action_shape
 
 
         self.data_set = ale_data_set.DataSet(width=self.image_width,

@@ -25,7 +25,7 @@ class DeepQLearner:
     Deep Q-learning network using Lasagne.
     """
 
-    def __init__(self, input_width, input_height, num_actions,
+    def __init__(self, input_width, input_height, action_shape,
                  num_frames, discount, learning_rate, rho,
                  rms_epsilon, momentum, clip_delta, freeze_interval,
                  batch_size, network_type, update_rule,
@@ -33,7 +33,13 @@ class DeepQLearner:
 
         self.input_width = input_width
         self.input_height = input_height
-        self.num_actions = num_actions
+        self.action_shape = action_shape
+        # The final output will be D x G
+        # This may be wasteful if granularity is not the same across all actions,
+        # but this lets us use numpy style broadcasting
+        self.degrees_of_freedom = len(action_shape)
+        self.max_granularity = max(action_shape)
+
         self.num_frames = num_frames
         self.batch_size = batch_size
         self.discount = discount
@@ -50,17 +56,19 @@ class DeepQLearner:
         self.update_counter = 0
 
         self.l_out = self.build_network(network_type, input_width, input_height,
-                                        num_actions, num_frames, batch_size)
+                                        action_shape, num_frames, batch_size)
         if self.freeze_interval > 0:
             self.next_l_out = self.build_network(network_type, input_width,
-                                                 input_height, num_actions,
+                                                 input_height, action_shape,
                                                  num_frames, batch_size)
             self.reset_q_hat()
 
         states = T.tensor4('states')
         next_states = T.tensor4('next_states')
         rewards = T.col('rewards')
-        actions = T.icol('actions')
+        # Normally, actions would have shape (batch_size, 1)
+        # Now, they need to have shape (batch_size, D), so this is now an imatrix
+        actions = T.imatrix('actions')
         terminals = T.icol('terminals')
 
         self.states_shared = theano.shared(
@@ -76,15 +84,20 @@ class DeepQLearner:
             broadcastable=(False, True))
 
         self.actions_shared = theano.shared(
-            np.zeros((batch_size, 1), dtype='int32'),
+            np.zeros((batch_size, self.degrees_of_freedom), dtype='int32'),
             broadcastable=(False, True))
 
         self.terminals_shared = theano.shared(
             np.zeros((batch_size, 1), dtype='int32'),
             broadcastable=(False, True))
 
+        # q_vals before: a (batch_size, output_dim) matrix, where ith row is
+        # q_values for ith sample
+        # what we would like: a (batch_size, D, G) matrix, where entry
+        # [sample][i][a_i] is the value for choosing a_i for the ith component
+
         q_vals = lasagne.layers.get_output(self.l_out, states / input_scale)
-        
+
         if self.freeze_interval > 0:
             next_q_vals = lasagne.layers.get_output(self.next_l_out,
                                                     next_states / input_scale)
@@ -93,9 +106,18 @@ class DeepQLearner:
                                                     next_states / input_scale)
             next_q_vals = theano.gradient.disconnected_grad(next_q_vals)
 
+        # building up the best next action from factored representation
+        # TODO check this axis
+        # shape should be (batch_size, D, G)
+        per_action_maxes = T.max(next_q_vals, axis=2)
+        # TODO is this the right axis?
+        overall_q_max = T.sum(per_action_maxes, axis=1, keepdims=True)
+
         target = (rewards +
                   (T.ones_like(terminals) - terminals) *
-                  self.discount * T.max(next_q_vals, axis=1, keepdims=True))
+                  self.discount * overall_q_max)
+        # q_vals shape: (batch_size, D, G)
+        # actions shape: (batch_size, D)
         diff = target - q_vals[T.arange(batch_size),
                                actions.reshape((-1,))].reshape((-1, 1))
 
@@ -151,24 +173,25 @@ class DeepQLearner:
                                        givens={states: self.states_shared})
 
     def build_network(self, network_type, input_width, input_height,
-                      output_dim, num_frames, batch_size):
+                      output_shape, num_frames, batch_size):
+        # EVERYTHING EXCEPT NIPS DNN IS BROKEN
         if network_type == "nature_cuda":
             return self.build_nature_network(input_width, input_height,
-                                             output_dim, num_frames, batch_size)
+                                             output_shape, num_frames, batch_size)
         if network_type == "nature_dnn":
             return self.build_nature_network_dnn(input_width, input_height,
-                                                 output_dim, num_frames,
+                                                 output_shape, num_frames,
                                                  batch_size)
         elif network_type == "nips_cuda":
             return self.build_nips_network(input_width, input_height,
-                                           output_dim, num_frames, batch_size)
+                                           output_shape, num_frames, batch_size)
         elif network_type == "nips_dnn":
             return self.build_nips_network_dnn(input_width, input_height,
-                                               output_dim, num_frames,
+                                               output_shape, num_frames,
                                                batch_size)
         elif network_type == "linear":
             return self.build_linear_network(input_width, input_height,
-                                             output_dim, num_frames, batch_size)
+                                             output_shape, num_frames, batch_size)
         else:
             raise ValueError("Unrecognized network: {}".format(network_type))
 
@@ -211,7 +234,7 @@ class DeepQLearner:
 
     def choose_action(self, state, epsilon):
         if self.rng.rand() < epsilon:
-            return self.rng.randint(0, self.num_actions)
+            return tuple(self.rng.randint(0, a_dim) for a_dim in self.action_shape)
         q_vals = self.q_vals(state)
         return np.argmax(q_vals)
 
@@ -219,7 +242,7 @@ class DeepQLearner:
         all_params = lasagne.layers.helper.get_all_param_values(self.l_out)
         lasagne.layers.helper.set_all_param_values(self.next_l_out, all_params)
 
-    def build_nature_network(self, input_width, input_height, output_dim,
+    def build_nature_network(self, input_width, input_height, output_shape,
                              num_frames, batch_size):
         """
         Build a large network consistent with the DeepMind Nature paper.
@@ -273,7 +296,7 @@ class DeepQLearner:
 
         l_out = lasagne.layers.DenseLayer(
             l_hidden1,
-            num_units=output_dim,
+            num_units=output_shape,
             nonlinearity=None,
             W=lasagne.init.HeUniform(),
             b=lasagne.init.Constant(.1)
@@ -282,7 +305,7 @@ class DeepQLearner:
         return l_out
 
 
-    def build_nature_network_dnn(self, input_width, input_height, output_dim,
+    def build_nature_network_dnn(self, input_width, input_height, output_shape,
                                  num_frames, batch_size):
         """
         Build a large network consistent with the DeepMind Nature paper.
@@ -333,7 +356,7 @@ class DeepQLearner:
 
         l_out = lasagne.layers.DenseLayer(
             l_hidden1,
-            num_units=output_dim,
+            num_units=output_shape,
             nonlinearity=None,
             W=lasagne.init.HeUniform(),
             b=lasagne.init.Constant(.1)
@@ -343,7 +366,7 @@ class DeepQLearner:
 
 
 
-    def build_nips_network(self, input_width, input_height, output_dim,
+    def build_nips_network(self, input_width, input_height, output_shape,
                            num_frames, batch_size):
         """
         Build a network consistent with the 2013 NIPS paper.
@@ -388,7 +411,7 @@ class DeepQLearner:
 
         l_out = lasagne.layers.DenseLayer(
             l_hidden1,
-            num_units=output_dim,
+            num_units=output_shape,
             nonlinearity=None,
             #W=lasagne.init.HeUniform(),
             W=lasagne.init.Normal(.01),
@@ -398,7 +421,7 @@ class DeepQLearner:
         return l_out
 
 
-    def build_nips_network_dnn(self, input_width, input_height, output_dim,
+    def build_nips_network_dnn(self, input_width, input_height, output_shape,
                                num_frames, batch_size):
         """
         Build a network consistent with the 2013 NIPS paper.
@@ -442,19 +465,37 @@ class DeepQLearner:
             b=lasagne.init.Constant(.1)
         )
 
+        # Create an output layer with D*G outputs, then reshape
+        # I tried having one output layer for each degree of freedom, but
+        # that made it hard to build an expression for the Q values in Theano
+        # (The reshape might be costly, but matrix indexing without the
+        # reshape is a nightmare.)
+        # Old comment below:
+        #
+        # There's one output layer for each degree of freedom.
+        # Note that technically, we could have a single output layer
+        # with sum(output_shape) output units, and this is probably
+        # more optimal because we'd have 1 matrix instead of D smaller
+        # ones (where D = degrees of freedom.) However, doing it this way
+        # makes computing the best action easier.
+        # Consider changing this around if this bottlenecks badly.
+
         l_out = lasagne.layers.DenseLayer(
-            l_hidden1,
-            num_units=output_dim,
-            nonlinearity=None,
-            #W=lasagne.init.HeUniform(),
-            W=lasagne.init.Normal(.01),
-            b=lasagne.init.Constant(.1)
+                l_hidden1,
+                num_units=self.degrees_of_freedom * self.max_granularity
+                nonlinearity=None,
+                #W=lasagne.init.HeUniform(),
+                W=lasagne.init.Normal(.01),
+                b=lasagne.init.Constant(.1)
+        )
+        l_shaped_out = l_out.reshape(
+            (self.degrees_of_freedom, self.max_granularity)
         )
 
-        return l_out
+        return l_shaped_out
 
 
-    def build_linear_network(self, input_width, input_height, output_dim,
+    def build_linear_network(self, input_width, input_height, output_shape,
                              num_frames, batch_size):
         """
         Build a simple linear learner.  Useful for creating
@@ -467,7 +508,7 @@ class DeepQLearner:
 
         l_out = lasagne.layers.DenseLayer(
             l_in,
-            num_units=output_dim,
+            num_units=output_shape,
             nonlinearity=None,
             W=lasagne.init.Constant(0.0),
             b=None
