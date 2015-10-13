@@ -91,8 +91,8 @@ class DeepQLearner:
             np.zeros((batch_size, 1), dtype='int32'),
             broadcastable=(False, True))
 
-        # q_vals before: a (batch_size, output_dim) matrix, where ith row is
-        # q_values for ith sample
+        # q_vals before: a (batch_size, output_dim) matrix, where [sample][i]
+        # is q_value for ith action for that sample
         # what we would like: a (batch_size, D, G) matrix, where entry
         # [sample][i][a_i] is the value for choosing a_i for the ith component
 
@@ -108,10 +108,12 @@ class DeepQLearner:
 
         # building up the best next action from factored representation
         # TODO check this axis
-        # shape should be (batch_size, D, G)
+        # shape before this is (batch_size, D, G)
         per_action_maxes = T.max(next_q_vals, axis=2)
+        # now shape is (batch_size, D)
         # TODO is this the right axis?
         overall_q_max = T.sum(per_action_maxes, axis=1, keepdims=True)
+        # now shape is (batch_size, 1)
 
         target = (rewards +
                   (T.ones_like(terminals) - terminals) *
@@ -123,7 +125,7 @@ class DeepQLearner:
         # TODO UGH DO THIS RIGHT
         # Can't think about numpy indexing properly right now
         action_values = [
-            q_vals[T.arange(batch_size), i, actions[:,i]]
+            q_vals[T.arange(batch_size), i, actions[..., i]]
             for i in xrange(self.degrees_of_freedom)
         ]
         action_values = T.sum(action_values, axis=0)
@@ -215,7 +217,7 @@ class DeepQLearner:
 
         states - b x f x h x w numpy array, where b is batch size,
                  f is num frames, h is height and w is width.
-        actions - b x 1 numpy array of integers
+        actions - b x d numpy array of integers
         rewards - b x 1 numpy array
         next_states - b x f x h x w numpy array
         terminals - b x 1 numpy boolean array (currently ignored)
@@ -240,13 +242,16 @@ class DeepQLearner:
                            self.input_width), dtype=theano.config.floatX)
         states[0, ...] = state
         self.states_shared.set_value(states)
+        # Returns a D x G array
         return self._q_vals()[0]
 
     def choose_action(self, state, epsilon):
         if self.rng.rand() < epsilon:
             return tuple(self.rng.randint(0, a_dim) for a_dim in self.action_shape)
         q_vals = self.q_vals(state)
-        return np.argmax(q_vals)
+        # Got a D x G array of values
+        # Get the D array of best actions
+        return np.argmax(q_vals, axis=1)
 
     def reset_q_hat(self):
         all_params = lasagne.layers.helper.get_all_param_values(self.l_out)
