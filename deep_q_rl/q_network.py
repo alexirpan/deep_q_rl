@@ -118,8 +118,18 @@ class DeepQLearner:
                   self.discount * overall_q_max)
         # q_vals shape: (batch_size, D, G)
         # actions shape: (batch_size, D)
-        diff = target - q_vals[T.arange(batch_size),
-                               actions.reshape((-1,))].reshape((-1, 1))
+        # Construct the Q values for the specified actions
+        # Recall numpy indexing convention: zips given iterables
+        # TODO UGH DO THIS RIGHT
+        # Can't think about numpy indexing properly right now
+        action_values = [
+            q_vals[T.arange(batch_size), i, actions[:,i]]
+            for i in xrange(self.degrees_of_freedom)
+        ]
+        action_values = T.sum(action_values, axis=0)
+
+        # TODO check if this still needs to be reshaped
+        diff = target - action_values.reshape((-1, 1))
 
         if self.clip_delta > 0:
             # If we simply take the squared clipped diff as our loss,
@@ -482,7 +492,7 @@ class DeepQLearner:
 
         l_out = lasagne.layers.DenseLayer(
                 l_hidden1,
-                num_units=self.degrees_of_freedom * self.max_granularity
+                num_units=self.degrees_of_freedom * self.max_granularity,
                 nonlinearity=None,
                 #W=lasagne.init.HeUniform(),
                 W=lasagne.init.Normal(.01),
