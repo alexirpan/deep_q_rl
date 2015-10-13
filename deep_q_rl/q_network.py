@@ -532,8 +532,8 @@ class DeepQLearner:
         return l_out
 
 def main():
-    net = DeepQLearner(84, 84, 16, 4, .99, .00025, .95, .95, 10000,
-                       32, 'nature_cuda')
+    net = DeepQLearner(84, 84, (3,3,2), 4, .99, .00025, .95, .95, 10000,
+                       32, 'nips_dnn')
 
 
 if __name__ == '__main__':
