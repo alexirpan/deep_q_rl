@@ -213,7 +213,7 @@ class NeuralAgent(object):
             phi = data_set.phi(cur_img)
             action = self.network.choose_action(phi, epsilon)
         else:
-            action = self.rng.randint(0, self.num_actions)
+            action = tuple(self.rng.randint(0, a_dim) for a_dim in self.action_shape)
 
         return action
 
@@ -290,8 +290,9 @@ class NeuralAgent(object):
         holdout_sum = 0
         if self.holdout_data is not None:
             for i in range(holdout_size):
-                holdout_sum += np.max(
-                    self.network.q_vals(self.holdout_data[i, ...]))
+                q_vals = self.network.q_vals(self.holdout_data[i, ...])
+                # D x G array
+                holdout_sum += np.sum(np.max(q_vals, axis=1))
 
         self._update_results_file(epoch, self.episode_counter,
                                   holdout_sum / holdout_size)
