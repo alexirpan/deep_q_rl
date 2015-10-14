@@ -85,7 +85,7 @@ class DeepQLearner:
 
         self.actions_shared = theano.shared(
             np.zeros((batch_size, self.degrees_of_freedom), dtype='int32'),
-            broadcastable=(False, True))
+            broadcastable=(False, False))
 
         self.terminals_shared = theano.shared(
             np.zeros((batch_size, 1), dtype='int32'),
@@ -97,13 +97,23 @@ class DeepQLearner:
         # [sample][i][a_i] is the value for choosing a_i for the ith component
 
         q_vals = lasagne.layers.get_output(self.l_out, states / input_scale)
+        # Lasagne layers are not raw Theano tensores. Do all the reshaping here
+        q_vals = q_vals.reshape(
+            (-1, self.degrees_of_freedom, self.max_granularity)
+        )
 
         if self.freeze_interval > 0:
             next_q_vals = lasagne.layers.get_output(self.next_l_out,
                                                     next_states / input_scale)
+            next_q_vals = next_q_vals.reshape(
+                (-1, self.degrees_of_freedom, self.max_granularity)
+            )
         else:
             next_q_vals = lasagne.layers.get_output(self.l_out,
                                                     next_states / input_scale)
+            next_q_vals = next_q_vals.reshape(
+                (-1, self.degrees_of_freedom, self.max_granularity)
+            )
             next_q_vals = theano.gradient.disconnected_grad(next_q_vals)
 
         # building up the best next action from factored representation
@@ -125,7 +135,7 @@ class DeepQLearner:
         # TODO UGH DO THIS RIGHT
         # Can't think about numpy indexing properly right now
         action_values = [
-            q_vals[T.arange(batch_size), i, actions[..., i]]
+            q_vals[T.arange(batch_size), i, actions[T.arange(batch_size), i]]
             for i in xrange(self.degrees_of_freedom)
         ]
         action_values = T.sum(action_values, axis=0)
@@ -504,11 +514,8 @@ class DeepQLearner:
                 W=lasagne.init.Normal(.01),
                 b=lasagne.init.Constant(.1)
         )
-        l_shaped_out = l_out.reshape(
-            (self.degrees_of_freedom, self.max_granularity)
-        )
 
-        return l_shaped_out
+        return l_out
 
 
     def build_linear_network(self, input_width, input_height, output_shape,
