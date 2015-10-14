@@ -12,6 +12,7 @@ import cPickle
 import numpy as np
 import theano
 
+import ale_action_map
 import ale_experiment
 import ale_agent
 import q_network
@@ -202,12 +203,12 @@ def launch(args, defaults, description):
 
     ale.loadROM(full_rom_path)
 
-    num_actions = len(ale.getMinimalActionSet())
+    action_shape = ale_action_map.ACTION_SHAPE
 
     if parameters.nn_file is None:
         network = q_network.DeepQLearner(defaults.RESIZED_WIDTH,
                                          defaults.RESIZED_HEIGHT,
-                                         num_actions,
+                                         action_shape,
                                          parameters.phi_length,
                                          parameters.discount,
                                          parameters.learning_rate,
