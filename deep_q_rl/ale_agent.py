@@ -133,7 +133,7 @@ class NeuralAgent(object):
         self.loss_averages = []
 
         self.start_time = time.time()
-        return_action = self.rng.randint(0, self.num_actions)
+        return_action = tuple(self.rng.randint(0, a_dim) for a_dim in self.action_shape)
 
         self.last_action = return_action
 

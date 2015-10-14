@@ -6,7 +6,10 @@ import numpy as np
 import time
 import theano
 
+import ale_action_map
+
 floatX = theano.config.floatX
+degrees_of_freedom = len(ale_action_map.ACTION_SHAPE)
 
 class DataSet(object):
     """A replay memory consisting of circular buffers for observed images,
@@ -36,7 +39,7 @@ actions, and rewards.
 
         # Allocate the circular buffers and indices.
         self.imgs = np.zeros((max_steps, height, width), dtype='uint8')
-        self.actions = np.zeros(max_steps, dtype='int32')
+        self.actions = np.zeros((max_steps, degrees_of_freedom), dtype='int32')
         self.rewards = np.zeros(max_steps, dtype=floatX)
         self.terminal = np.zeros(max_steps, dtype='bool')
 
@@ -101,7 +104,7 @@ next_states for batch_size randomly chosen state transitions.
                            self.height,
                            self.width),
                           dtype='uint8')
-        actions = np.zeros((batch_size, 1), dtype='int32')
+        actions = np.zeros((batch_size, degrees_of_freedom), dtype='int32')
         rewards = np.zeros((batch_size, 1), dtype=floatX)
         terminal = np.zeros((batch_size, 1), dtype='bool')
         next_states = np.zeros((batch_size,

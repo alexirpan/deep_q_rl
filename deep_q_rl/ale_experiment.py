@@ -8,6 +8,8 @@ import logging
 import numpy as np
 import cv2
 
+import ale_action_map
+
 # Number of rows to crop off the bottom of the (downsampled) screen.
 # This is appropriate for breakout, but it may need to be modified
 # for other games.
@@ -139,7 +141,8 @@ class ALEExperiment(object):
         action = self.agent.start_episode(self.get_observation())
         num_steps = 0
         while True:
-            reward = self._step(self.min_action_set[action])
+            true_action = ale_action_map.XYF_TO_ACTION[action]
+            reward = self._step(true_action)
             self.terminal_lol = (self.death_ends_episode and not testing and
                                  self.ale.lives() < start_lives)
             terminal = self.ale.game_over() or self.terminal_lol

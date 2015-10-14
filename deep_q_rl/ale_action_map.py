@@ -10,6 +10,8 @@ X_DIM = 3 # (noop, left, right)
 Y_DIM = 3 # (noop, up, down)
 FIRE_DIM = 2 # (noop, fire)
 
+ACTION_SHAPE = (X_DIM, Y_DIM, FIRE_DIM)
+
 ACTION_TO_XYF = [
     # noop, fire
     (0,0,0),

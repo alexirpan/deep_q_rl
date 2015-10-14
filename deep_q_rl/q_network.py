@@ -251,7 +251,8 @@ class DeepQLearner:
         q_vals = self.q_vals(state)
         # Got a D x G array of values
         # Get the D array of best actions
-        return np.argmax(q_vals, axis=1)
+        # TODO this copying into tuple may be a bad idea?
+        return tuple(np.argmax(q_vals, axis=1))
 
     def reset_q_hat(self):
         all_params = lasagne.layers.helper.get_all_param_values(self.l_out)
