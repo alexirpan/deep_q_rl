@@ -97,45 +97,40 @@ class DeepQLearner:
         # [sample][i][a_i] is the value for choosing a_i for the ith component
 
         q_vals = lasagne.layers.get_output(self.l_out, states / input_scale)
-        # Lasagne layers are not raw Theano tensores. Do all the reshaping here
-        q_vals = q_vals.reshape(
-            (-1, self.degrees_of_freedom, self.max_granularity)
-        )
+        # Lasagne layers are not raw Theano tensors, so all slicing shenanigans
+        # have to happen here
+        # Different degrees of freedom have different granularity. So, we cannot
+        # use a numpy 2d array, or a theano matrix. It all has to be done in
+        # pure Python.
+        q_vals = self._per_action(q_vals)
 
         if self.freeze_interval > 0:
             next_q_vals = lasagne.layers.get_output(self.next_l_out,
                                                     next_states / input_scale)
-            next_q_vals = next_q_vals.reshape(
-                (-1, self.degrees_of_freedom, self.max_granularity)
-            )
         else:
             next_q_vals = lasagne.layers.get_output(self.l_out,
                                                     next_states / input_scale)
-            next_q_vals = next_q_vals.reshape(
-                (-1, self.degrees_of_freedom, self.max_granularity)
-            )
             next_q_vals = theano.gradient.disconnected_grad(next_q_vals)
+        next_q_vals = self._per_action(next_q_vals)
 
         # building up the best next action from factored representation
-        # TODO check this axis
-        # shape before this is (batch_size, D, G)
-        per_action_maxes = T.max(next_q_vals, axis=2)
-        # now shape is (batch_size, D)
-        # TODO is this the right axis?
-        overall_q_max = T.sum(per_action_maxes, axis=1, keepdims=True)
-        # now shape is (batch_size, 1)
+        # each shape is (batch_size, G)
+        per_action_maxes = [T.max(n_q_v, axis=1, keepdims=True) for n_q_v in next_q_vals]
+        # now each shape is (batch_size, 1)
+        overall_q_max = T.sum(per_action_maxes, axis=0)
+        # should now be single (batch_size, 1) array
 
         target = (rewards +
                   (T.ones_like(terminals) - terminals) *
                   self.discount * overall_q_max)
-        # q_vals shape: (batch_size, D, G)
+        # q_vals shape: list of D (batch_size, G) matrices
         # actions shape: (batch_size, D)
         # Construct the Q values for the specified actions
         # Recall numpy indexing convention: zips given iterables
         # TODO UGH DO THIS RIGHT
         # Can't think about numpy indexing properly right now
         action_values = [
-            q_vals[T.arange(batch_size), i, actions[T.arange(batch_size), i]]
+            q_vals[i][T.arange(batch_size), actions[T.arange(batch_size), i]]
             for i in xrange(self.degrees_of_freedom)
         ]
         action_values = T.sum(action_values, axis=0)
@@ -189,7 +184,12 @@ class DeepQLearner:
             updates = lasagne.updates.apply_momentum(updates, None,
                                                      self.momentum)
 
-        self._train = theano.function([], [loss, q_vals], updates=updates,
+        # When given a list, Theano expects every entry in that list
+        # to be a tensor. q_vals is already a list of tensors, so we need to
+        # prepend the loss tensor at the start.
+        loss_and_q = [loss]
+        loss_and_q.extend(q_vals)
+        self._train = theano.function([], loss_and_q, updates=updates,
                                       givens=givens)
         self._q_vals = theano.function([], q_vals,
                                        givens={states: self.states_shared})
@@ -217,7 +217,16 @@ class DeepQLearner:
         else:
             raise ValueError("Unrecognized network: {}".format(network_type))
 
-
+    def _per_action(self, q_vals):
+        """ Turns the Q value lookup table into a more amenable form."""
+        # shapes of q_values is (batch_size, sum(action_shape))
+        # need to turn into array of (batch_size, action_dim)
+        per_action_q_vals = []
+        off = 0
+        for dim in self.action_shape:
+            per_action_q_vals.append(q_vals[T.arange(self.batch_size), off:off+dim])
+            off += dim
+        return per_action_q_vals
 
     def train(self, states, actions, rewards, next_states, terminals):
         """
@@ -243,7 +252,8 @@ class DeepQLearner:
         if (self.freeze_interval > 0 and
             self.update_counter % self.freeze_interval == 0):
             self.reset_q_hat()
-        loss, _ = self._train()
+        loss_and_q = self._train()
+        loss = loss_and_q[0]
         self.update_counter += 1
         return np.sqrt(loss)
 
@@ -252,17 +262,18 @@ class DeepQLearner:
                            self.input_width), dtype=theano.config.floatX)
         states[0, ...] = state
         self.states_shared.set_value(states)
-        # Returns a D x G array
-        return self._q_vals()[0]
+        # self._q_vals() returns a D long list of batch_size x G arrays
+        q_vals = self._q_vals()
+        return [qv[0] for qv in q_vals]
 
     def choose_action(self, state, epsilon):
         if self.rng.rand() < epsilon:
             return tuple(self.rng.randint(0, a_dim) for a_dim in self.action_shape)
         q_vals = self.q_vals(state)
-        # Got a D x G array of values
+        # Got a D long list of length G arrays
         # Get the D array of best actions
         # TODO this copying into tuple may be a bad idea?
-        return tuple(np.argmax(q_vals, axis=1))
+        return tuple(np.argmax(q_v) for q_v in q_vals)
 
     def reset_q_hat(self):
         all_params = lasagne.layers.helper.get_all_param_values(self.l_out)
@@ -491,24 +502,14 @@ class DeepQLearner:
             b=lasagne.init.Constant(.1)
         )
 
-        # Create an output layer with D*G outputs, then reshape
-        # I tried having one output layer for each degree of freedom, but
-        # that made it hard to build an expression for the Q values in Theano
-        # (The reshape might be costly, but matrix indexing without the
-        # reshape is a nightmare.)
-        # Old comment below:
-        #
-        # There's one output layer for each degree of freedom.
-        # Note that technically, we could have a single output layer
-        # with sum(output_shape) output units, and this is probably
-        # more optimal because we'd have 1 matrix instead of D smaller
-        # ones (where D = degrees of freedom.) However, doing it this way
-        # makes computing the best action easier.
-        # Consider changing this around if this bottlenecks badly.
-
+        # Create a lookup table.
+        # To get values for a specific degree of freedom, need to do slicing
+        # later down the line.
+        # Using one big matrix (rather than one matrix for each degree of freedom)
+        # should be better for vectorizing
         l_out = lasagne.layers.DenseLayer(
                 l_hidden1,
-                num_units=self.degrees_of_freedom * self.max_granularity,
+                num_units=sum(self.action_shape),
                 nonlinearity=None,
                 #W=lasagne.init.HeUniform(),
                 W=lasagne.init.Normal(.01),

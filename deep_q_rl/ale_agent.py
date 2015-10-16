@@ -291,8 +291,8 @@ class NeuralAgent(object):
         if self.holdout_data is not None:
             for i in range(holdout_size):
                 q_vals = self.network.q_vals(self.holdout_data[i, ...])
-                # D x G array
-                holdout_sum += np.sum(np.max(q_vals, axis=1))
+                # list of G long arrays
+                holdout_sum += np.sum(np.max(q_v) for q_v in q_vals)
 
         self._update_results_file(epoch, self.episode_counter,
                                   holdout_sum / holdout_size)

@@ -122,7 +122,6 @@ next_states for batch_size randomly chosen state transitions.
             initial_indices = np.arange(index, index + self.phi_length)
             transition_indices = initial_indices + 1
             end_index = index + self.phi_length - 1
-            
             # Check that the initial state corresponds entirely to a
             # single episode, meaning none but the last frame may be
             # terminal. If the last frame of the initial state is
@@ -135,7 +134,9 @@ next_states for batch_size randomly chosen state transitions.
 
             # Add the state transition to the response.
             states[count] = self.imgs.take(initial_indices, axis=0, mode='wrap')
-            actions[count] = self.actions.take(end_index, mode='wrap')
+            # self.actions is 2D and take's default behavior is to use
+            # the flattened representation, need to specify axis
+            actions[count] = self.actions.take(end_index, axis=0, mode='wrap')
             rewards[count] = self.rewards.take(end_index, mode='wrap')
             terminal[count] = self.terminal.take(end_index, mode='wrap')
             next_states[count] = self.imgs.take(transition_indices,
